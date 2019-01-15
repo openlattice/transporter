@@ -14,6 +14,100 @@ distTar {
     archiveName "transporter.tgz"
 }
 
-mainClassName = "com.openlattice.transporter.Transporter"
+ext.projectName = "transporter"
+ext.scmUrl = 'scm:git:https://github.com/openlattice/transporter.git'
+ext.connectionUrl = 'scm:git:https://github.com/openlattice/transporter.git'
+ext.developerConnectionUrl = 'scm:git:https://github.com/openlattice/transporter.git'
+
+//apply from: "https://raw.githubusercontent.com/openlattice/gradles/master/openlattice.gradle"
+
+/////////// ANYTHING BELOW SHOULD BE UNCOMMENTED AS SOON AS GIT STUFF ABOVE WORKS /////////
+ext.fullVersion = "1"
+apply from: "../gradles/repos.gradle"
+apply from: "../gradles/publish.gradle"
+ext.kotlin_version='1.3.10'
+ext.junit_version='4.12'
+////////////////////////////////////////////////////////////////////////////////////////////
+
+mainClassName = "com.openlattice.transporter.TransporterKt"
 sourceCompatibility = JavaVersion.VERSION_1_10
 targetCompatibility = JavaVersion.VERSION_1_10
+
+configurations {
+    provided
+}
+
+sourceSets {
+    main.compileClasspath += configurations.provided
+    test.compileClasspath += configurations.provided
+    test.runtimeClasspath += configurations.provided
+}
+
+
+jar {
+    doFirst {
+        manifest {
+            attributes "Class-Path": configurations.runtime.files.collect { it.getName() }.join(" ")
+        }
+    }
+}
+
+dependencies {
+
+    compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+    compile 'commons-cli:commons-cli:1.4'
+
+    if (project.hasProperty('developmentMode') && project.developmentMode) {
+        logger.quiet(project.name + " using project dependencies.")
+        compile project(":rhizome")
+        compile project(":api")
+
+        testCompile(project(path: ":api", configuration: "tests"))
+        testCompile(project(path: ":rhizome", configuration: "tests"))
+        testCompile(project(path: ":rhizome-client", configuration: "tests"))
+        testCompile project(path: ":api")
+
+    } else {
+        logger.quiet(project.name + " using jar dependencies.")
+        compile "com.openlattice:rhizome:${rhizome_version}"
+        compile "com.openlattice:api:${api_version}"
+
+        testCompile "com.openlattice:api:${api_version}:tests"
+        testCompile "com.openlattice:rhizome:${rhizome_version}:tests"
+        testCompile "com.openlattice:rhizome-client:${rhizome_client_version}:tests"
+        testCompile "com.openlattice:api:${api_version}"
+
+    }
+
+    compile fileTree(dir: "lib/", include: "*.jar")
+
+    testCompile "junit:junit:${junit_version}"
+    testCompile "org.mockito:mockito-core:2.2.7"
+
+}
+
+startScripts {
+    classpath = files(jar.archivePath)
+}
+
+eclipse {
+    ext.downloadSources = true
+    ext.downloadJavadoc = true
+
+    ext.sourceCompatibility = JavaVersion.VERSION_1_10
+    ext.targetCompatibility = JavaVersion.VERSION_1_10
+}
+
+eclipse.classpath.plusConfigurations += [configurations.provided]
+
+
+compileKotlin {
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+}
+compileTestKotlin {
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+}
