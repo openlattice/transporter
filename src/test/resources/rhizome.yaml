@@ -1,0 +1,6 @@
+hikari:
+  jdbcUrl: jdbc:postgresql://localhost:5432/openlattice
+  username: "oltest"
+  password: "test"
+  maximumPoolSize: 98
+  connectionTimeout: 12000000
