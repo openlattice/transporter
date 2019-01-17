@@ -12,4 +12,4 @@ build/
 logging/
 out/
 target/
-src/main/resources/*
+src/main/resources/auth0.yaml
