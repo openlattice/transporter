@@ -12,3 +12,4 @@ build/
 logging/
 out/
 target/
+src/main/resources/*

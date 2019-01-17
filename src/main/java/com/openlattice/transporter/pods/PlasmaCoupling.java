@@ -16,22 +16,28 @@
  *
  * You can contact the owner of the copyright at support@openlattice.com
  *
- *
  */
 
-package com.openlattice.transporter
+package com.openlattice.transporter.pods;
 
+import com.openlattice.conductor.rpc.ConductorElasticsearchApi;
+import com.openlattice.hazelcast.serializers.ConductorElasticsearchCallStreamSerializer;
 
-/**
- *
- * @author Matthew Tamayo-Rios &lt;matthew@openlattice.com&gt;
- */
+import javax.annotation.PostConstruct;
+import javax.inject.Inject;
+import org.springframework.context.annotation.Configuration;
 
-fun main(args: Array<String>) {
-    System.out.println("Transporter is live !")
+@Configuration
+public class PlasmaCoupling {
 
-    val tl = TransporterAtlas();
-    tl.sync();
+    @Inject
+    private ConductorElasticsearchApi elasticsearchApi;
 
+    @Inject
+    private ConductorElasticsearchCallStreamSerializer cecss;
 
+    @PostConstruct
+    public void connect() {
+        cecss.setConductorElasticsearchApi( elasticsearchApi );
+    }
 }
