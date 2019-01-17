@@ -34,6 +34,7 @@ import com.openlattice.hazelcast.pods.MapstoresPod;
 import com.openlattice.hazelcast.pods.SharedStreamSerializersPod;
 import com.openlattice.jdbc.JdbcPod;
 import com.openlattice.transporter.pods.TransporterServicesPod;
+import com.openlattice.transporter.pods.TransporterSparkPod;
 import com.openlattice.transporter.pods.PlasmaCoupling;
 import com.openlattice.postgres.PostgresPod;
 import com.openlattice.postgres.PostgresTablesPod;
@@ -48,6 +49,7 @@ public class Transporter extends RhizomeApplicationServer {
             TransporterServicesPod.class,
             ByteBlobServicePod.class,
             TypeCodecsPod.class,
+            TransporterSparkPod.class,
             SharedStreamSerializersPod.class,
             PlasmaCoupling.class,
             Auth0Pod.class,
