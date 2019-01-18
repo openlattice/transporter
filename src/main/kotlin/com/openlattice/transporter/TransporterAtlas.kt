@@ -53,5 +53,6 @@ class TransporterAtlas(
         // this is testing code
         val entsetid = UUID.fromString("1744c297-83b4-42d5-ae23-2c3ccaba876e")
         val es = edm.getEntitySet(entsetid);
+        logger.info("Yay, we already found out the name of that entitySet ! It is "+es.title )
     }
 }
