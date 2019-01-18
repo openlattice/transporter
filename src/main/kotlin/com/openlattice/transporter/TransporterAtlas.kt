@@ -49,6 +49,8 @@ class TransporterAtlas(
 
     @Scheduled(fixedRate = 5000)
     fun sync() {
+
+        // this is testing code
         val entsetid = UUID.fromString("1744c297-83b4-42d5-ae23-2c3ccaba876e")
         val es = edm.getEntitySet(entsetid);
     }
