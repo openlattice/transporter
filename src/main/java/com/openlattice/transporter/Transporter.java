@@ -21,6 +21,7 @@
 package com.openlattice.transporter;
 
 import com.dataloom.mappers.ObjectMappers;
+import com.kryptnostic.rhizome.configuration.websockets.BaseRhizomeServer;
 import com.kryptnostic.rhizome.core.RhizomeApplicationServer;
 import com.kryptnostic.rhizome.hazelcast.serializers.RhizomeUtils.Pods;
 import com.kryptnostic.rhizome.pods.hazelcast.RegistryBasedHazelcastInstanceConfigurationPod;
@@ -33,21 +34,21 @@ import com.openlattice.datastore.pods.ByteBlobServicePod;
 import com.openlattice.hazelcast.pods.MapstoresPod;
 import com.openlattice.hazelcast.pods.SharedStreamSerializersPod;
 import com.openlattice.jdbc.JdbcPod;
-import com.openlattice.transporter.pods.TransporterServicesPod;
-import com.openlattice.transporter.pods.TransporterSparkPod;
-import com.openlattice.transporter.pods.PlasmaCoupling;
+import com.openlattice.transporter.pods.*;
 import com.openlattice.postgres.PostgresPod;
 import com.openlattice.postgres.PostgresTablesPod;
 
 /**
  * @author Matthew Tamayo-Rios &lt;matthew@openlattice.com&gt;
  */
-public class Transporter extends RhizomeApplicationServer {
+public class Transporter extends BaseRhizomeServer {
     static final Class<?>[] rhizomePods = new Class<?>[] { RegistryBasedHazelcastInstanceConfigurationPod.class };
 
     static final Class<?>[] transporterPods = new Class<?>[] {
             TransporterServicesPod.class,
+            TransporterSyncPod.class,
             ByteBlobServicePod.class,
+            TransporterSecurityPod.class,
             TypeCodecsPod.class,
             TransporterSparkPod.class,
             SharedStreamSerializersPod.class,
@@ -71,11 +72,11 @@ public class Transporter extends RhizomeApplicationServer {
     }
 
     @Override
-    public void sprout( String... activeProfiles ) {
-        super.sprout( activeProfiles );
+    public void start( String... activeProfiles ) throws Exception {
+        super.start( activeProfiles );
     }
 
-    public static void main( String[] args ) {
-        new Transporter().sprout( args );
+    public static void main( String[] args ) throws Exception {
+        new Transporter().start( args );
     }
 }

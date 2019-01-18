@@ -21,17 +21,29 @@
 
 package com.openlattice.transporter
 
-
 /**
  *
  * @author Matthew Tamayo-Rios &lt;matthew@openlattice.com&gt;
  */
 
-fun main(args: Array<String>) {
-    System.out.println("Transporter is live !")
 
-    val tl = TransporterAtlas();
-    tl.sync();
+import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Scheduled
+import org.springframework.stereotype.Component
+import java.text.SimpleDateFormat
+import java.util.*
 
 
+@Component
+class TransporterAtlas() {
+
+    companion object {
+        private val logger = LoggerFactory.getLogger(TransporterAtlas::class.java)
+        private val dateFormat = SimpleDateFormat("HH:mm:ss")
+    }
+
+    @Scheduled(fixedRate = 5000)
+    fun sync() {
+        logger.info("The time is now {}", dateFormat.format( Date()))
+    }
 }
