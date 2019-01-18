@@ -20,11 +20,6 @@
 
 package com.openlattice.transporter.pods;
 
-import static com.google.common.base.Preconditions.checkState;
-import static com.openlattice.datastore.util.Util.returnAndLog;
-import static com.openlattice.search.PersistentSearchMessengerKt.ALERT_MESSENGER_INTERVAL_MILLIS;
-import static com.openlattice.users.Auth0SyncTaskKt.REFRESH_INTERVAL_MILLIS;
-
 import com.amazonaws.services.s3.AmazonS3;
 import com.dataloom.mappers.ObjectMappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,25 +32,10 @@ import com.kryptnostic.rhizome.configuration.service.ConfigurationService;
 import com.openlattice.ResourceConfigurationLoader;
 import com.openlattice.auth0.Auth0TokenProvider;
 import com.openlattice.authentication.Auth0Configuration;
-import com.openlattice.authorization.AuthorizationManager;
-import com.openlattice.authorization.AuthorizationQueryService;
-import com.openlattice.authorization.DbCredentialService;
-import com.openlattice.authorization.HazelcastAclKeyReservationService;
-import com.openlattice.authorization.HazelcastAuthorizationService;
-import com.openlattice.authorization.PostgresUserApi;
-import com.openlattice.authorization.AbstractSecurableObjectResolveTypeService;
-import com.openlattice.authorization.HazelcastAbstractSecurableObjectResolveTypeService;
-import com.openlattice.authorization.EdmAuthorizationHelper;
-import com.openlattice.bootstrap.AuthorizationBootstrap;
-import com.openlattice.bootstrap.OrganizationBootstrap;
+import com.openlattice.authorization.*;
 import com.openlattice.conductor.rpc.ConductorConfiguration;
-import com.openlattice.conductor.rpc.MapboxConfiguration;
-import com.openlattice.data.EntityDatastore;
-import com.openlattice.data.EntityKeyIdService;
-import com.openlattice.data.ids.PostgresEntityKeyIdService;
 import com.openlattice.data.storage.ByteBlobDataManager;
 import com.openlattice.data.storage.PostgresDataManager;
-import com.openlattice.data.storage.PostgresEntityDataQueryService;
 import com.openlattice.datastore.pods.ByteBlobServicePod;
 import com.openlattice.datastore.services.EdmManager;
 import com.openlattice.datastore.services.EdmService;
@@ -65,28 +45,14 @@ import com.openlattice.edm.properties.PostgresTypeManager;
 import com.openlattice.edm.schemas.SchemaQueryService;
 import com.openlattice.edm.schemas.manager.HazelcastSchemaManager;
 import com.openlattice.edm.schemas.postgres.PostgresSchemaQueryService;
-import com.openlattice.graph.Graph;
-import com.openlattice.graph.core.GraphService;
-import com.openlattice.hazelcast.HazelcastQueue;
-import com.openlattice.ids.HazelcastIdGenerationService;
-import com.openlattice.data.storage.HazelcastEntityDatastore;
-import com.openlattice.mail.MailServiceClient;
 import com.openlattice.organizations.HazelcastOrganizationService;
 import com.openlattice.organizations.roles.HazelcastPrincipalService;
 import com.openlattice.organizations.roles.SecurePrincipalsManager;
 import com.openlattice.postgres.PostgresTableManager;
-import com.openlattice.search.PersistentSearchMessenger;
-import com.openlattice.search.PersistentSearchMessengerHelpers;
-import com.openlattice.search.SearchService;
+import com.openlattice.transporter.TransporterAtlas;
 import com.openlattice.users.Auth0SyncHelpers;
 import com.openlattice.users.Auth0SyncTask;
 import com.zaxxer.hikari.HikariDataSource;
-import com.openlattice.transporter.TransporterAtlas;
-
-import java.io.IOException;
-import java.util.concurrent.TimeUnit;
-import javax.inject.Inject;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -94,6 +60,12 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Profile;
+
+import javax.inject.Inject;
+import java.io.IOException;
+import java.util.concurrent.TimeUnit;
+
+import static com.openlattice.users.Auth0SyncTaskKt.REFRESH_INTERVAL_MILLIS;
 
 @Configuration
 @Import( { ByteBlobServicePod.class } )
@@ -201,19 +173,6 @@ public class TransporterServicesPod {
     }
 
     @Bean
-    public AuthorizationBootstrap authzBoot() {
-        return returnAndLog( new AuthorizationBootstrap( hazelcastInstance, principalService() ),
-                "Checkpoint AuthZ Boostrap" );
-    }
-
-    @Bean
-    public OrganizationBootstrap orgBoot() {
-        checkState( authzBoot().isInitialized(), "Roles must be initialized." );
-        return returnAndLog( new OrganizationBootstrap( organizationsManager() ),
-                "Checkpoint organization bootstrap." );
-    }
-
-    @Bean
     public Auth0TokenProvider auth0TokenProvider() {
         return new Auth0TokenProvider( auth0Configuration );
     }
@@ -257,8 +216,8 @@ public class TransporterServicesPod {
     }
 
     @Bean
-    public PostgresEntityDataQueryService dataQueryService() {
-        return new PostgresEntityDataQueryService( hikariDataSource, byteBlobDataManager );
+    public PostgresEdmManager edmManager() {
+        return new PostgresEdmManager( hikariDataSource, tableManager );
     }
 
     @Bean
@@ -274,20 +233,9 @@ public class TransporterServicesPod {
     }
 
     @Bean
-    public GraphService graphService() {
-        return new Graph( hikariDataSource, dataModelService() );
-    }
-
-    @Bean
     public PostgresDataManager postgresDataManager() {
         return new PostgresDataManager( hikariDataSource );
     }
-
-    @Bean
-    public PostgresEdmManager edmManager() {
-        return new PostgresEdmManager( hikariDataSource, tableManager );
-    }
-
 
     @Bean
     public TransporterAtlas transporterAtlas() {
@@ -296,6 +244,5 @@ public class TransporterServicesPod {
                 dataModelService()
         );
     }
-
 
 }

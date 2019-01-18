@@ -28,22 +28,18 @@ package com.openlattice.transporter
 
 
 import com.openlattice.datastore.services.EdmManager
-import com.openlattice.datastore.services.EdmService
-import com.openlattice.transporter.pods.TransporterServicesPod
 import com.zaxxer.hikari.HikariDataSource
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.text.SimpleDateFormat
 import java.util.*
-import javax.inject.Inject
 
 
 @Component
 class TransporterAtlas(
         private val hds: HikariDataSource,
         private var edm: EdmManager
-
 ) {
 
     companion object {
@@ -53,7 +49,7 @@ class TransporterAtlas(
 
     @Scheduled(fixedRate = 5000)
     fun sync() {
-        logger.info("The time is now {}", dateFormat.format( Date()))
-        logger.info(hds.toString())
+        val entsetid = UUID.fromString("1744c297-83b4-42d5-ae23-2c3ccaba876e")
+        val es = edm.getEntitySet(entsetid);
     }
 }
