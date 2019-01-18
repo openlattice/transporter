@@ -242,18 +242,8 @@ public class TransporterServicesPod {
     }
 
     @Bean
-    public AbstractSecurableObjectResolveTypeService securableObjectTypes() {
-        return new HazelcastAbstractSecurableObjectResolveTypeService( hazelcastInstance );
-    }
-
-    @Bean
     public SchemaQueryService schemaQueryService() {
         return new PostgresSchemaQueryService( hikariDataSource );
-    }
-
-    @Bean
-    public PostgresEdmManager edmManager() {
-        return new PostgresEdmManager( hikariDataSource, tableManager );
     }
 
     @Bean
@@ -289,29 +279,22 @@ public class TransporterServicesPod {
     }
 
     @Bean
-    public EntityDatastore entityDatastore() {
-        return new HazelcastEntityDatastore( hazelcastInstance, executor, defaultObjectMapper(), idService(),
-                postgresDataManager(), dataQueryService() );
-    }
-
-    @Bean
-    public HazelcastIdGenerationService idGenerationService() {
-        return new HazelcastIdGenerationService( hazelcastInstance );
-    }
-
-    @Bean
-    public EntityKeyIdService idService() {
-        return new PostgresEntityKeyIdService( hazelcastInstance, hikariDataSource, idGenerationService() );
-    }
-
-    @Bean
     public PostgresDataManager postgresDataManager() {
         return new PostgresDataManager( hikariDataSource );
     }
 
     @Bean
+    public PostgresEdmManager edmManager() {
+        return new PostgresEdmManager( hikariDataSource, tableManager );
+    }
+
+
+    @Bean
     public TransporterAtlas transporterAtlas() {
-        return new TransporterAtlas( hikariDataSource );
+        return new TransporterAtlas(
+                hikariDataSource,
+                dataModelService()
+        );
     }
 
 
