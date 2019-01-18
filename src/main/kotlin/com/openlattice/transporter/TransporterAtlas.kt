@@ -42,7 +42,7 @@ class TransporterAtlas() {
         private val dateFormat = SimpleDateFormat("HH:mm:ss")
     }
 
-    @Scheduled(fixedRate = 5000)
+    @Scheduled(fixedRate = 50000)
     fun sync() {
         logger.info("The time is now {}", dateFormat.format( Date()))
     }
