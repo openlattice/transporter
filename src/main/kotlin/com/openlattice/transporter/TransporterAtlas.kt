@@ -27,6 +27,8 @@ package com.openlattice.transporter
  */
 
 
+import com.openlattice.transporter.pods.TransporterServicesPod
+import com.zaxxer.hikari.HikariDataSource
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
@@ -35,15 +37,18 @@ import java.util.*
 
 
 @Component
-class TransporterAtlas() {
+class TransporterAtlas(
+        private val hds: HikariDataSource
+                       ) {
 
     companion object {
         private val logger = LoggerFactory.getLogger(TransporterAtlas::class.java)
         private val dateFormat = SimpleDateFormat("HH:mm:ss")
     }
 
-    @Scheduled(fixedRate = 50000)
+    @Scheduled(fixedRate = 5000)
     fun sync() {
         logger.info("The time is now {}", dateFormat.format( Date()))
+        logger.info(hds.toString())
     }
 }

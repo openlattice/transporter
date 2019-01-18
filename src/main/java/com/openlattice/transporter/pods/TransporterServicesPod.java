@@ -81,6 +81,7 @@ import com.openlattice.search.SearchService;
 import com.openlattice.users.Auth0SyncHelpers;
 import com.openlattice.users.Auth0SyncTask;
 import com.zaxxer.hikari.HikariDataSource;
+import com.openlattice.transporter.TransporterAtlas;
 
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
@@ -155,11 +156,6 @@ public class TransporterServicesPod {
 
         logger.info( "Using aws conductor configuration: {}", config );
         return config;
-    }
-
-    @Bean( name = "mapboxConfiguration")
-    public MapboxConfiguration mapboxConfiguration() throws IOException {
-        return configurationService.getConfiguration( MapboxConfiguration.class );
     }
 
     @Bean
@@ -314,8 +310,9 @@ public class TransporterServicesPod {
     }
 
     @Bean
-    public EdmAuthorizationHelper authorizingComponent() {
-        return new EdmAuthorizationHelper( dataModelService(), authorizationManager() );
+    public TransporterAtlas transporterAtlas() {
+        return new TransporterAtlas( hikariDataSource );
     }
+
 
 }

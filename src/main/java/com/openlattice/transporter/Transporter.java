@@ -46,7 +46,6 @@ public class Transporter extends BaseRhizomeServer {
 
     static final Class<?>[] transporterPods = new Class<?>[] {
             TransporterServicesPod.class,
-            TransporterSyncPod.class,
             ByteBlobServicePod.class,
             TransporterSecurityPod.class,
             TypeCodecsPod.class,
