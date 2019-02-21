@@ -21,12 +21,44 @@
 
 package com.openlattice.transporter
 
+import com.dataloom.mappers.ObjectMappers
+import com.kryptnostic.rhizome.configuration.websockets.BaseRhizomeServer
+import com.kryptnostic.rhizome.core.RhizomeApplicationServer
+import com.kryptnostic.rhizome.hazelcast.serializers.RhizomeUtils
+import com.kryptnostic.rhizome.pods.hazelcast.RegistryBasedHazelcastInstanceConfigurationPod
+import com.openlattice.auth0.Auth0Pod
+import com.openlattice.aws.AwsS3Pod
+import com.openlattice.data.serializers.FullQualifiedNameJacksonSerializer
+import com.openlattice.jdbc.JdbcPod
+import com.openlattice.postgres.PostgresPod
+
 /**
  *
  * @author Matthew Tamayo-Rios &lt;matthew@openlattice.com&gt;
  */
 
 fun main(args: Array<String>) {
+    ObjectMappers.foreach(FullQualifiedNameJacksonSerializer::registerWithMapper)
     System.out.println("Transporter is live !")
-
 }
+//
+//private val datastorePods = arrayOf(
+//        ByteBlobServicePod::class.java, DatastoreServicesPod::class.java, TypeCodecsPod::class.java,
+//        SharedStreamSerializersPod::class.java, AwsS3Pod::class.java, JdbcPod::class.java,
+//        DatastoreNeuronPod::class.java, PostgresPod::class.java, AuditingConfigurationPod::class.java
+//)
+//private val rhizomePods = arrayOf(RegistryBasedHazelcastInstanceConfigurationPod::class.java, Auth0Pod::class.java)
+//private val webPods = arrayOf<Class<*>>(DatastoreServletsPod::class.java, DatastoreSecurityPod::class.java)
+//
+//
+//
+//class Transporter : BaseRhizomeServer(
+//        RhizomeUtils.Pods.concatenate(
+//                pods,
+//                webPods,
+//                rhizomePods,
+//                RhizomeApplicationServer.DEFAULT_PODS,
+//                datastorePods
+//        )) {
+//
+//}
