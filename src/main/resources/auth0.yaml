@@ -1,0 +1,10 @@
+clientId: "KTzgyxs6KBcJHB872eSMe2cpTHzhxS99"
+clientSecret: "tjAwhBit0deVUor3lcd7YRlHRc_4FJwv_fcLp_ozO2-D2Lh38066IUoGPL4zx1vP"
+domain: "openlattice.auth0.com"
+managementApiUrl: "empty"
+configurations: []
+#issuer: "https://openlattice.auth0.com/"
+#audience: ""
+#secret: "ignored"
+#base64EncodedSecret: false
+#signingAlgorithm: "HS256"

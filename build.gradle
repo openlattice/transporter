@@ -82,16 +82,19 @@ dependencies {
     if (project.hasProperty('developmentMode') && project.developmentMode) {
         logger.quiet(project.name + " using project dependencies.")
         compile project(":rhizome")
+        compile project(":conductor-client")
         compile project(":api")
 
         testCompile(project(path: ":api", configuration: "tests"))
         testCompile(project(path: ":rhizome", configuration: "tests"))
         testCompile(project(path: ":rhizome-client", configuration: "tests"))
+        testCompile(project(path: ":conductor-client", configuration: "tests"))
         testCompile project(path: ":api")
 
     } else {
         logger.quiet(project.name + " using jar dependencies.")
         compile "com.openlattice:rhizome:${rhizome_version}"
+        compile "com.openlattice:conductor-client:${conductor_client_version}"
         compile "com.openlattice:api:${api_version}"
 
         testCompile "com.openlattice:api:${api_version}:tests"
@@ -106,6 +109,52 @@ dependencies {
     testCompile "junit:junit:${junit_version}"
     testCompile "org.mockito:mockito-core:2.2.7"
 
+}
+
+def T_ARGS = "$System.env.TRANSPORTER_ARGS"
+def T_XMS = "$System.env.TRANSPORTER_XMS"
+def T_XMX = "$System.env.TRANSPORTER_XMX"
+def PARALLEL = "$System.env.PARALLELISM"
+def GC = "$System.env.GC"
+
+if (T_XMS == 'null' || T_XMS == null || T_XMS == "") {
+    T_XMS = '-Xms1g'
+}
+
+if (T_XMX == 'null' || T_XMX == null || T_XMX == "") {
+    T_XMX = '-Xms1g'
+}
+
+if (T_ARGS == 'null' || T_ARGS == null || T_ARGS == "") {
+    T_ARGS = 'local postgres medialocal auditlocal'
+}
+
+if (PARALLEL == 'null' || PARALLEL == null || PARALLEL == "") {
+    PARALLEL = "-Djava.util.concurrent.ForkJoinPool.common.parallelism=" + Runtime.runtime.availableProcessors()
+}
+
+if (GC == 'null' || GC == null || GC == "") {
+    GC = "-XX:+UseG1GC"
+}
+println "Using java args for running ${projectName}: Xms=" + T_XMS + ",Xmx=" + T_XMX + ",forkJoinPool=" + PARALLEL + " -server"
+applicationDefaultJvmArgs = [T_XMX, T_XMX, GC, "-server", PARALLEL]
+applicationDefaultJvmArgs += ["--add-modules", "java.se",
+                              "--add-exports", "java.base/jdk.internal.ref=ALL-UNNAMED",
+                              "--add-opens", "java.base/java.lang=ALL-UNNAMED",
+                              "--add-opens", "java.base/java.nio=ALL-UNNAMED",
+                              "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED",
+                              "--add-opens", "java.management/sun.management=ALL-UNNAMED",
+                              "--add-opens", "jdk.management/com.sun.management.internal=ALL-UNNAMED"]
+
+run {
+    if (T_ARGS != null) {
+        args T_ARGS.split()
+    } else if (System.getProperty("exec.args") != null) {
+        args System.getProperty("exec.args").split()
+    }
+    if (project.hasProperty('appArgs')) {
+        args Eval.me(appArgs)
+    }
 }
 
 spotbugs {
@@ -132,6 +181,7 @@ eclipse {
 }
 
 eclipse.classpath.plusConfigurations += [configurations.provided]
+
 
 
 compileKotlin {
