@@ -5,14 +5,13 @@ import com.google.common.eventbus.Subscribe
 import com.google.common.util.concurrent.ListeningExecutorService
 import com.hazelcast.core.HazelcastInstance
 import com.openlattice.assembler.AssemblerConnectionManager
-import com.openlattice.data.storage.buildPreparableFiltersSql
 import com.openlattice.datastore.services.EdmManager
 import com.openlattice.datastore.services.EntitySetManager
+import com.openlattice.edm.events.ClearAllDataEvent
 import com.openlattice.edm.events.EntityTypeCreatedEvent
 import com.openlattice.edm.events.EntityTypeDeletedEvent
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import java.sql.Connection
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -33,11 +32,11 @@ final class TransporterService(
     }
 
     private val transporterDataSource = AssemblerConnectionManager.createDataSource( "transporter", configuration.server, configuration.ssl )
-    private val entityTypes: MutableMap<UUID, TransporterEntityTypeState> = ConcurrentHashMap()
+    private val entityTypes: MutableMap<UUID, TransporterEntityTypeManager> = ConcurrentHashMap()
 
 
     init {
-        dataModelService.entityTypes.map { et -> et.id to TransporterEntityTypeState(et, dataModelService) }.toMap(entityTypes)
+        dataModelService.entityTypes.map { et -> et.id to TransporterEntityTypeManager(et, dataModelService) }.toMap(entityTypes)
         logger.info("Creating {} entity set tables", entityTypes.size)
         transporterDataSource.connection.use { c ->
             entityTypes.values.forEach {
@@ -48,8 +47,14 @@ final class TransporterService(
         logger.info("Entity set tables created")
 
         if (configuration.once) {
-            pollOnce()
-            exitProcess(0)
+            try {
+                pollOnce()
+            } catch (e: Exception) {
+                logger.error("error", e)
+                throw e
+            } finally {
+                exitProcess(0)
+            }
         } else {
             eventBus.register(this)
             executor.submit {
@@ -60,8 +65,8 @@ final class TransporterService(
 
     private fun pollOnce() {
         transporterDataSource.connection.use {
-            entitySetService.getEntitySets().forEach {es ->
-//            entitySetService.getEntitySet(UUID.fromString("3a1c9bb1-5e72-4735-92b7-715cc9555eb2"))?.let { es ->
+//            entitySetService.getEntitySets().filterNot { it.flags.contains(EntitySetFlag.AUDIT) }.forEach { es ->
+            entitySetService.getEntitySet(UUID.fromString("3a1c9bb1-5e72-4735-92b7-715cc9555eb2"))?.let { es ->
                 entityTypes[es.entityTypeId]?.updateEntitySet(it, es)
             }
         }
@@ -91,35 +96,9 @@ final class TransporterService(
         // TODO: remove entity type entries
     }
 
-
-    private fun runLinkedQuery(c: Connection, typeId: UUID, propertiesToUpdate: MutableSet<UUID>) {
-        val properties = propertiesToUpdate.associateWith( dataModelService::getPropertyType )
-        val (sql, _) = buildPreparableFiltersSql(
-                1,
-                properties,
-                mapOf(),
-                setOf(),
-                linking = true,
-                idsPresent = false,
-                detailed = false,
-                partitionsPresent = false
-        )
-        logger.info("{}", sql)
-    }
-
-    private fun runUnlinkedQuery(c: Connection, typeId: UUID, propertiesToUpdate: Set<UUID>) {
-        val properties = propertiesToUpdate.associateWith( dataModelService::getPropertyType )
-        val (sql, _) = buildPreparableFiltersSql(
-                1,
-                properties,
-                mapOf(),
-                setOf(),
-                linking = false,
-                idsPresent = false,
-                detailed = false,
-                partitionsPresent = false
-        )
-        logger.info("{}", sql)
+    @Subscribe
+    fun handleClearAllData(e: ClearAllDataEvent) {
+        // TODO: truncate all tables
     }
 }
 

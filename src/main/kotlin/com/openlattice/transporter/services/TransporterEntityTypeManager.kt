@@ -1,5 +1,6 @@
 package com.openlattice.transporter.services
 
+import com.openlattice.data.storage.MetadataOption
 import com.openlattice.data.storage.buildPreparableFiltersSql
 import com.openlattice.datastore.services.EdmManager
 import com.openlattice.edm.EntitySet
@@ -8,24 +9,25 @@ import com.openlattice.edm.type.EntityType
 import com.openlattice.edm.type.PropertyType
 import com.openlattice.postgres.PostgresArrays
 import com.openlattice.postgres.PostgresColumn
-import com.openlattice.postgres.PostgresColumn.ENTITY_SET_ID
-import com.openlattice.postgres.PostgresColumn.ID_VALUE
+import com.openlattice.postgres.PostgresColumn.*
 import com.openlattice.postgres.PostgresColumnDefinition
 import com.openlattice.postgres.PostgresTableDefinition
 import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.SQLException
 import java.sql.Statement
+import java.util.*
 
 
 fun PostgresTableDefinition.defaults(): PostgresTableDefinition {
     this.addColumns(
-            PostgresColumn.ENTITY_SET_ID,
-            PostgresColumn.ID_VALUE
+            ENTITY_SET_ID,
+            ID_VALUE,
+            VERSION
     )
     this.primaryKey(
-            PostgresColumn.ENTITY_SET_ID,
-            PostgresColumn.ID_VALUE
+            ENTITY_SET_ID,
+            ID_VALUE
     )
     return this
 }
@@ -34,9 +36,9 @@ fun quote(name: String): String {
     return "\"$name\""
 }
 
-class TransporterEntityTypeState(private val et: EntityType, dataModelService: EdmManager) {
+class TransporterEntityTypeManager(private val et: EntityType, dataModelService: EdmManager) {
     companion object {
-        val logger = LoggerFactory.getLogger(TransporterEntityTypeState::class.java)
+        val logger = LoggerFactory.getLogger(TransporterEntityTypeManager::class.java)
     }
     val singletonTable = PostgresTableDefinition(quote("u_${et.id}")).defaults()
     val linkedTable = PostgresTableDefinition(quote("l_${et.id}")).defaults()
@@ -61,8 +63,9 @@ class TransporterEntityTypeState(private val et: EntityType, dataModelService: E
                     }
         }
     }
+
     private fun executeLog(st: Statement, sql: String) {
-        logger.info("Executing $sql")
+//        logger.info("Executing $sql")
         try {
             st.execute(sql)
         } catch (e: SQLException) {
@@ -73,11 +76,13 @@ class TransporterEntityTypeState(private val et: EntityType, dataModelService: E
 
     public fun createTables(c: Connection) {
         c.createStatement().use {st ->
-            logger.info("Creating table ${singletonTable.name}")
+//            executeLog(st, "DROP TABLE ${singletonTable.name}")
+//            executeLog(st, "DROP TABLE ${linkedTable.name}")
+//            logger.info("Creating table ${singletonTable.name}")
             executeLog(st, singletonTable.createTableQuery())
-            logger.info("Creating table ${linkedTable.name}")
+//            logger.info("Creating table ${linkedTable.name}")
             executeLog(st, linkedTable.createTableQuery())
-            logger.info("Created tables for ${et.type}")
+//            logger.info("Created tables for ${et.type}")
         }
 
     }
@@ -85,9 +90,9 @@ class TransporterEntityTypeState(private val et: EntityType, dataModelService: E
     fun updateEntitySet(conn: Connection, es: EntitySet) {
         val (bson_data, _) = buildPreparableFiltersSql(
                 1,
-                properties.associate { it.id to it },
+                properties.associateBy { it.id },
                 mapOf(),
-                setOf(),
+                EnumSet.of(MetadataOption.VERSION),
                 es.isLinking,
                 idsPresent = false,
                 partitionsPresent = false,
@@ -103,17 +108,19 @@ class TransporterEntityTypeState(private val et: EntityType, dataModelService: E
                 "jsonb_array_elements_text(${PostgresColumn.PROPERTIES.name} -> '${it.id}')::$type AS $id"
             }
         }.joinToString(", ")
-        val src = "SELECT ${ID_VALUE.name}, ${ENTITY_SET_ID.name}, $columns FROM ($bson_data) src"
+        val src = "SELECT ${ENTITY_SET_ID.name}, ${ID_VALUE.name}, ${VERSION.name}, $columns FROM ($bson_data) src"
         val table = if (es.isLinking) { linkedTable } else { singletonTable }
-        val pk = table.primaryKey.map { it.name }.joinToString(", ")
+        val pk = table.primaryKey.joinToString(", ") { it.name }
         val valueColumns = table.columns.filterNot(table.primaryKey::contains)
+        val colList = table.columns.joinToString(", ") { it.name }
 
         val SQL = "WITH src AS ($src) " +
                 "INSERT INTO ${table.name} " +
-                "SELECT * FROM src " +
+                "($colList) " +
+                "SELECT $colList FROM src " +
                 "ON CONFLICT ($pk) DO UPDATE " +
-                "SET " + valueColumns.map { "${it.name} = excluded.${it.name}" }.joinToString(", ")
-
+                "SET " + valueColumns.joinToString(", ") { "${it.name} = excluded.${it.name}" }
+        logger.info("SQL: $SQL")
         try {
             conn.prepareStatement(SQL).use {
                 it.setArray(1, PostgresArrays.createUuidArray(conn, es.id))
