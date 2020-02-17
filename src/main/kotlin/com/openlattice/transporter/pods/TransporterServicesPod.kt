@@ -117,6 +117,6 @@ class TransporterServicesPod {
 
     @Bean
     fun transporterService(): TransporterService {
-        return TransporterService(executor, eventBus, configuration, hazelcastInstance, entitySetManager(), dataModelService())
+        return TransporterService(executor, eventBus, configuration, hazelcastInstance, entitySetManager(), dataModelService(), partitionManager() )
     }
 }

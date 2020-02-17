@@ -5,11 +5,13 @@ import com.google.common.eventbus.Subscribe
 import com.google.common.util.concurrent.ListeningExecutorService
 import com.hazelcast.core.HazelcastInstance
 import com.openlattice.assembler.AssemblerConnectionManager
+import com.openlattice.data.storage.partitions.PartitionManager
 import com.openlattice.datastore.services.EdmManager
 import com.openlattice.datastore.services.EntitySetManager
 import com.openlattice.edm.events.ClearAllDataEvent
 import com.openlattice.edm.events.EntityTypeCreatedEvent
 import com.openlattice.edm.events.EntityTypeDeletedEvent
+import com.openlattice.edm.set.EntitySetFlag
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.util.*
@@ -24,7 +26,8 @@ final class TransporterService(
         private val configuration: TransporterConfiguration,
         private val hazelcastInstance: HazelcastInstance,
         private val entitySetService: EntitySetManager,
-        private val dataModelService: EdmManager
+        private val dataModelService: EdmManager,
+        private val partitionManager: PartitionManager
 )
 {
     companion object {
@@ -36,7 +39,7 @@ final class TransporterService(
 
 
     init {
-        dataModelService.entityTypes.map { et -> et.id to TransporterEntityTypeManager(et, dataModelService) }.toMap(entityTypes)
+        dataModelService.entityTypes.map { et -> et.id to TransporterEntityTypeManager(et, dataModelService, partitionManager) }.toMap(entityTypes)
         logger.info("Creating {} entity set tables", entityTypes.size)
         transporterDataSource.connection.use { c ->
             entityTypes.values.forEach {
@@ -64,11 +67,9 @@ final class TransporterService(
     }
 
     private fun pollOnce() {
-        transporterDataSource.connection.use {
-//            entitySetService.getEntitySets().filterNot { it.flags.contains(EntitySetFlag.AUDIT) }.forEach { es ->
-            entitySetService.getEntitySet(UUID.fromString("3a1c9bb1-5e72-4735-92b7-715cc9555eb2"))?.let { es ->
-                entityTypes[es.entityTypeId]?.updateEntitySet(it, es)
-            }
+        entitySetService.getEntitySets().filterNot { it.flags.contains(EntitySetFlag.AUDIT) }.forEach { es ->
+//        entitySetService.getEntitySet(UUID.fromString("cd92c07f-175a-4f2c-a6d4-8e8ba2c1d6ee"))?.let { es ->
+            entityTypes[es.entityTypeId]?.updateEntitySet(transporterDataSource, es)
         }
     }
 
