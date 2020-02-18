@@ -22,12 +22,13 @@ import java.sql.SQLException
 import java.sql.Statement
 import java.util.*
 
+const val batchSize = 64_000
 
 fun PostgresTableDefinition.defaults(): PostgresTableDefinition {
     this.addColumns(
             ENTITY_SET_ID,
-            ID_VALUE,
-            VERSION
+            ID_VALUE
+             , VERSION
     )
     this.primaryKey(
             ENTITY_SET_ID,
@@ -62,7 +63,7 @@ class TransporterEntityTypeManager(
         }
         private val datatypes = CacheBuilder.newBuilder().build(loader)
     }
-    private val singletonTable = PostgresTableDefinition(quote("u_${et.id}")).defaults()
+    private val table = PostgresTableDefinition(quote("et_${et.id}")).defaults()
 
     private val validProperties =
         et.properties.asSequence().map(dataModelService::getPropertyType)
@@ -71,23 +72,24 @@ class TransporterEntityTypeManager(
                 .map {
                     val prop = it.first
                     val col = quote(it.first.id.toString())
-                    val (single, array) = it.second.get()
-                    singletonTable.addColumns(PostgresColumnDefinition(col, single))
+                    val (single, _) = it.second.get()
+                    table.addColumns(PostgresColumnDefinition(col, single))
                     prop
                 }.associateBy { it.id }.toMutableMap()
 
-    private fun executeLog(st: Statement, sql: String) {
-        try {
+    private fun executeLog(st: Statement, sql: String): Boolean {
+        return try {
+            logger.debug(sql)
             st.execute(sql)
         } catch (e: SQLException) {
             logger.error("Error running $sql", e)
-            throw e;
+            throw e
         }
     }
 
-    public fun createTables(c: Connection) {
+    public fun createTable(c: Connection) {
         c.createStatement().use { st ->
-            executeLog(st, singletonTable.createTableQuery())
+            executeLog(st, table.createTableQuery())
         }
     }
 
@@ -97,10 +99,87 @@ class TransporterEntityTypeManager(
             // eventually do other housekeeping
             return
         }
-        val table = singletonTable
+        hds.connection.use { conn ->
+            conn.autoCommit = false
+
+            val entitySetIds = PostgresArrays.createUuidArray(conn, setOf(es.id))
+            val partitions = PostgresArrays.createIntArray(conn, partitionManager.getEntitySetPartitions(es.id))
+            val propertyTypeIds = PostgresArrays.createUuidArray(conn, validProperties.keys)
+
+            try {
+                val tempTable = "transporter_batch"
+                val batchQuery = "create temporary table $tempTable on commit drop as " +
+                        " SELECT *" +
+                        " FROM ${DATA.name}" +
+                        " WHERE ${VERSION.name} > 0" +
+                        " AND ${ENTITY_SET_ID.name} = ANY(?)" +
+                        " AND ${PARTITION.name} = ANY(?)" +
+                        " AND ${PROPERTY_TYPE_ID.name} = ANY(?)" +
+                        " AND ${LAST_PROPAGATE.name} < ${DataTables.LAST_WRITE.name} " +
+                        " LIMIT $batchSize"
+                val count = conn.prepareStatement(batchQuery).use { st ->
+                    st.setArray(1, entitySetIds)
+                    st.setArray(2, partitions)
+                    st.setArray(3, propertyTypeIds)
+                    logger.debug(batchQuery)
+                    val count = st.executeUpdate()
+                    logger.info("$count rows in batch")
+                    count
+                }
+                if (count > 0) {
+                    conn.createStatement().use { st ->
+                        st.execute("CREATE INDEX pk_$tempTable ON $tempTable (${ENTITY_SET_ID.name}, ${ID.name}, ${PROPERTY_TYPE_ID.name})")
+                        val ids = "${ENTITY_SET_ID.name}, ${ID.name}"
+                        val newIdCount = st.executeUpdate("with ids as (select distinct $ids from $tempTable) insert into ${table.name} ($ids) select $ids from ids on conflict do nothing")
+                        logger.info("$newIdCount new ids in type ${et.type}")
+
+                        val updatedPropCount = validProperties.map { (id, pt) ->
+                            val type = datatypes[pt.datatype].get().first
+                            val srcCol = PostgresDataTables.getSourceDataColumnName(type, pt.postgresIndexType)
+                            val destCol = quote(id.toString())
+
+                            val updateProperty = "UPDATE ${table.name}" +
+                                    " SET $destCol = $srcCol" +
+                                    " FROM $tempTable " +
+                                    " WHERE $tempTable.${ENTITY_SET_ID.name} = ${table.name}.${ENTITY_SET_ID.name}" +
+                                    " AND $tempTable.${ID.name} = ${table.name}.${ID.name}" +
+                                    " AND $tempTable.${PROPERTY_TYPE_ID.name} = '$id'"
+                            logger.debug(updateProperty)
+                            st.executeUpdate(updateProperty)
+                        }.sum()
+                        logger.info("Updated {} property values", updatedPropCount)
+                        val flushWriteVersion = "UPDATE ${DATA.name}" +
+                                " SET ${LAST_PROPAGATE.name} = $tempTable.${DataTables.LAST_WRITE.name}" +
+                                " FROM $tempTable" +
+                                " WHERE " + arrayOf(ENTITY_SET_ID, ID, PROPERTY_TYPE_ID).joinToString(" AND ") {
+                            "${DATA.name}.${it.name} = $tempTable.${it.name}"
+                        }
+                        logger.debug("SQL: {}", flushWriteVersion)
+                        val lastWriteCount = st.executeUpdate(flushWriteVersion)
+                        logger.info("Flushed {} writes", lastWriteCount)
+                    }
+                }
+                logger.info("committing transaction")
+                conn.commit()
+
+            } catch (e: Throwable) {
+                logger.error("Rolling back transaction", e)
+                conn.rollback()
+                throw e
+            }
+        }
+    }
+
+    fun updateEntitySetOld(hds: HikariDataSource, es: EntitySet) {
+        if (es.isLinking) {
+            // we don't actually want to materialize duplicate data for each linked entity set. we might need to
+            // eventually do other housekeeping
+            return
+        }
 
         val queryEntitySets = setOf(es.id)
         val partitions = partitionManager.getPartitionsByEntitySetId(queryEntitySets).values.flatten().toSet()
+
 
         val filterQuery = "select distinct d.${ID.name} " +
                 "from ${DATA.name} d " +

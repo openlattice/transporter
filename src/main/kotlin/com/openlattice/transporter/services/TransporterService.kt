@@ -43,7 +43,7 @@ final class TransporterService(
         logger.info("Creating {} entity set tables", entityTypes.size)
         transporterDataSource.connection.use { c ->
             entityTypes.values.forEach {
-                it.createTables(c)
+                it.createTable(c)
             }
         }
         // TODO: ensure FDW is in place
@@ -67,10 +67,13 @@ final class TransporterService(
     }
 
     private fun pollOnce() {
+        val start = System.currentTimeMillis()
         entitySetService.getEntitySets().filterNot { it.flags.contains(EntitySetFlag.AUDIT) }.forEach { es ->
-//        entitySetService.getEntitySet(UUID.fromString("cd92c07f-175a-4f2c-a6d4-8e8ba2c1d6ee"))?.let { es ->
+//        entitySetService.getEntitySet(UUID.fromString("4c38fd26-c616-4f8b-bfb6-b8581859effb"))?.let { es ->
             entityTypes[es.entityTypeId]?.updateEntitySet(transporterDataSource, es)
         }
+        val duration = System.currentTimeMillis() - start
+        logger.info("Total poll duration time: {} ms", duration)
     }
 
     private fun pollInfinitely() {
