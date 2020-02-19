@@ -17,23 +17,30 @@ import com.openlattice.postgres.streams.PreparedStatementHolderSupplier
 import com.zaxxer.hikari.HikariDataSource
 import org.apache.olingo.commons.api.edm.EdmPrimitiveTypeKind
 import org.slf4j.LoggerFactory
-import java.sql.Connection
 import java.sql.SQLException
 import java.sql.Statement
 import java.util.*
 
 const val batchSize = 64_000
+const val olSchema = "ol"
+const val transporterSchema = "transporter"
+
+val newMode = false
 
 fun PostgresTableDefinition.defaults(): PostgresTableDefinition {
     this.addColumns(
             ENTITY_SET_ID,
-            ID_VALUE
-             , VERSION
+            ID_VALUE,
+            // this is to avoid confusion when benchmarking code with and without version
+            PostgresColumnDefinition(VERSION.name, VERSION.datatype).withDefault(0)
     )
     this.primaryKey(
             ENTITY_SET_ID,
             ID_VALUE
     )
+    if (!newMode) {
+        this.addColumns(VERSION)
+    }
     return this
 }
 
@@ -59,7 +66,6 @@ class TransporterEntityTypeManager(
                     Optional.empty()
                 }
             }
-
         }
         private val datatypes = CacheBuilder.newBuilder().build(loader)
     }
@@ -87,13 +93,34 @@ class TransporterEntityTypeManager(
         }
     }
 
-    public fun createTable(c: Connection) {
-        c.createStatement().use { st ->
-            executeLog(st, table.createTableQuery())
+    public fun createTable(transporter: HikariDataSource, enterprise: HikariDataSource) {
+        transporter.connection.use { c ->
+            c.autoCommit = false
+            c.createStatement().use { st ->
+//                executeLog(st, "DROP TABLE ${table.name}")
+                executeLog(st, table.createTableQuery())
+            }
+            c.commit()
+        }
+        enterprise.connection.use { c ->
+            c.createStatement().use {st ->
+                val drop = "DROP FOREIGN TABLE IF EXISTS transporter.${table.name}"
+                val createForeignTable = "IMPORT FOREIGN SCHEMA public LIMIT TO ( ${table.name} ) FROM SERVER transporter INTO transporter;"
+                executeLog(st, drop)
+                executeLog(st, createForeignTable)
+            }
         }
     }
 
-    fun updateEntitySet(hds: HikariDataSource, es: EntitySet) {
+    fun updateEntitySet(enterprise: HikariDataSource, transporter: HikariDataSource, es: EntitySet) {
+        if (newMode) {
+            pushColumnsFromEnterpriseStrategy(enterprise, es)
+        } else {
+            pullUpdatedColumnarViewFromTransporter(transporter, es)
+        }
+    }
+
+    fun pushColumnsFromEnterpriseStrategy(hds: HikariDataSource, es: EntitySet) {
         if (es.isLinking) {
             // we don't actually want to materialize duplicate data for each linked entity set. we might need to
             // eventually do other housekeeping
@@ -128,9 +155,8 @@ class TransporterEntityTypeManager(
                 }
                 if (count > 0) {
                     conn.createStatement().use { st ->
-                        st.execute("CREATE INDEX pk_$tempTable ON $tempTable (${ENTITY_SET_ID.name}, ${ID.name}, ${PROPERTY_TYPE_ID.name})")
                         val ids = "${ENTITY_SET_ID.name}, ${ID.name}"
-                        val newIdCount = st.executeUpdate("with ids as (select distinct $ids from $tempTable) insert into ${table.name} ($ids) select $ids from ids on conflict do nothing")
+                        val newIdCount = st.executeUpdate("with ids as (select distinct $ids from $tempTable) insert into $transporterSchema.${table.name} ($ids) select $ids from ids on conflict do nothing")
                         logger.info("$newIdCount new ids in type ${et.type}")
 
                         val updatedPropCount = validProperties.map { (id, pt) ->
@@ -138,21 +164,21 @@ class TransporterEntityTypeManager(
                             val srcCol = PostgresDataTables.getSourceDataColumnName(type, pt.postgresIndexType)
                             val destCol = quote(id.toString())
 
-                            val updateProperty = "UPDATE ${table.name}" +
+                            val updateProperty = "UPDATE $transporterSchema.${table.name} dest" +
                                     " SET $destCol = $srcCol" +
-                                    " FROM $tempTable " +
-                                    " WHERE $tempTable.${ENTITY_SET_ID.name} = ${table.name}.${ENTITY_SET_ID.name}" +
-                                    " AND $tempTable.${ID.name} = ${table.name}.${ID.name}" +
-                                    " AND $tempTable.${PROPERTY_TYPE_ID.name} = '$id'"
+                                    " FROM $tempTable src " +
+                                    " WHERE src.${ENTITY_SET_ID.name} = dest.${ENTITY_SET_ID.name}" +
+                                    " AND src.${ID.name} = dest.${ID.name}" +
+                                    " AND src.${PROPERTY_TYPE_ID.name} = '$id'"
                             logger.debug(updateProperty)
                             st.executeUpdate(updateProperty)
                         }.sum()
                         logger.info("Updated {} property values", updatedPropCount)
-                        val flushWriteVersion = "UPDATE ${DATA.name}" +
-                                " SET ${LAST_PROPAGATE.name} = $tempTable.${DataTables.LAST_WRITE.name}" +
-                                " FROM $tempTable" +
-                                " WHERE " + arrayOf(ENTITY_SET_ID, ID, PROPERTY_TYPE_ID).joinToString(" AND ") {
-                            "${DATA.name}.${it.name} = $tempTable.${it.name}"
+                        val flushWriteVersion = "UPDATE ${DATA.name} dest" +
+                                " SET ${LAST_PROPAGATE.name} = src.${DataTables.LAST_WRITE.name}" +
+                                " FROM $tempTable src" +
+                                " WHERE " + arrayOf(PARTITION, ID, PROPERTY_TYPE_ID).joinToString(" AND ") {
+                            "dest.${it.name} = src.${it.name}"
                         }
                         logger.debug("SQL: {}", flushWriteVersion)
                         val lastWriteCount = st.executeUpdate(flushWriteVersion)
@@ -170,7 +196,7 @@ class TransporterEntityTypeManager(
         }
     }
 
-    fun updateEntitySetOld(hds: HikariDataSource, es: EntitySet) {
+    fun pullUpdatedColumnarViewFromTransporter(hds: HikariDataSource, es: EntitySet) {
         if (es.isLinking) {
             // we don't actually want to materialize duplicate data for each linked entity set. we might need to
             // eventually do other housekeeping

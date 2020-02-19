@@ -12,6 +12,7 @@ import com.openlattice.edm.events.ClearAllDataEvent
 import com.openlattice.edm.events.EntityTypeCreatedEvent
 import com.openlattice.edm.events.EntityTypeDeletedEvent
 import com.openlattice.edm.set.EntitySetFlag
+import com.zaxxer.hikari.HikariDataSource
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.util.*
@@ -25,26 +26,25 @@ final class TransporterService(
         private val eventBus: EventBus,
         private val configuration: TransporterConfiguration,
         private val hazelcastInstance: HazelcastInstance,
-        private val entitySetService: EntitySetManager,
+        private val enterprise: HikariDataSource,
         private val dataModelService: EdmManager,
-        private val partitionManager: PartitionManager
+        private val partitionManager: PartitionManager,
+        private val entitySetService: EntitySetManager
 )
 {
     companion object {
         val logger = LoggerFactory.getLogger(TransporterService::class.java)
     }
 
-    private val transporterDataSource = AssemblerConnectionManager.createDataSource( "transporter", configuration.server, configuration.ssl )
+    private val transporter = AssemblerConnectionManager.createDataSource( "transporter", configuration.server, configuration.ssl )
     private val entityTypes: MutableMap<UUID, TransporterEntityTypeManager> = ConcurrentHashMap()
 
 
     init {
         dataModelService.entityTypes.map { et -> et.id to TransporterEntityTypeManager(et, dataModelService, partitionManager) }.toMap(entityTypes)
         logger.info("Creating {} entity set tables", entityTypes.size)
-        transporterDataSource.connection.use { c ->
-            entityTypes.values.forEach {
-                it.createTable(c)
-            }
+        entityTypes.values.forEach {
+            it.createTable(transporter, enterprise)
         }
         // TODO: ensure FDW is in place
         logger.info("Entity set tables created")
@@ -70,7 +70,7 @@ final class TransporterService(
         val start = System.currentTimeMillis()
         entitySetService.getEntitySets().filterNot { it.flags.contains(EntitySetFlag.AUDIT) }.forEach { es ->
 //        entitySetService.getEntitySet(UUID.fromString("4c38fd26-c616-4f8b-bfb6-b8581859effb"))?.let { es ->
-            entityTypes[es.entityTypeId]?.updateEntitySet(transporterDataSource, es)
+            entityTypes[es.entityTypeId]?.updateEntitySet(enterprise, transporter, es)
         }
         val duration = System.currentTimeMillis() - start
         logger.info("Total poll duration time: {} ms", duration)
