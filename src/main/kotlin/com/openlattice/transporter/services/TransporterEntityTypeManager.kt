@@ -2,14 +2,19 @@ package com.openlattice.transporter.services
 
 import com.google.common.cache.CacheBuilder
 import com.google.common.cache.CacheLoader
+import com.openlattice.IdConstants
 import com.openlattice.data.storage.MetadataOption
 import com.openlattice.data.storage.buildPreparableFiltersSql
 import com.openlattice.data.storage.partitions.PartitionManager
 import com.openlattice.datastore.services.EdmManager
+import com.openlattice.datastore.services.EntitySetManager
 import com.openlattice.edm.EntitySet
 import com.openlattice.edm.PostgresEdmTypeConverter
+import com.openlattice.edm.set.EntitySetFlag
 import com.openlattice.edm.type.EntityType
+import com.openlattice.edm.type.PropertyType
 import com.openlattice.postgres.*
+import com.openlattice.postgres.DataTables.LAST_WRITE
 import com.openlattice.postgres.PostgresColumn.*
 import com.openlattice.postgres.PostgresTable.DATA
 import com.openlattice.postgres.streams.BasePostgresIterable
@@ -25,7 +30,7 @@ const val batchSize = 64_000
 const val olSchema = "ol"
 const val transporterSchema = "transporter"
 
-val newMode = false
+val mode = 2
 
 fun PostgresTableDefinition.defaults(): PostgresTableDefinition {
     this.addColumns(
@@ -38,9 +43,6 @@ fun PostgresTableDefinition.defaults(): PostgresTableDefinition {
             ENTITY_SET_ID,
             ID_VALUE
     )
-    if (!newMode) {
-        this.addColumns(VERSION)
-    }
     return this
 }
 
@@ -50,8 +52,9 @@ fun quote(name: String): String {
 
 class TransporterEntityTypeManager(
         private val et: EntityType,
-        dataModelService: EdmManager,
-        private val partitionManager: PartitionManager
+        private val dataModelService: EdmManager,
+        private val partitionManager: PartitionManager,
+        private val entitySetService: EntitySetManager
 ) {
     companion object {
         private val logger = LoggerFactory.getLogger(TransporterEntityTypeManager::class.java)
@@ -97,7 +100,7 @@ class TransporterEntityTypeManager(
         transporter.connection.use { c ->
             c.autoCommit = false
             c.createStatement().use { st ->
-//                executeLog(st, "DROP TABLE ${table.name}")
+                executeLog(st, "DROP TABLE ${table.name}")
                 executeLog(st, table.createTableQuery())
             }
             c.commit()
@@ -112,40 +115,160 @@ class TransporterEntityTypeManager(
         }
     }
 
+    fun updateAllEntitysets(enterprise: HikariDataSource, transporter: HikariDataSource) {
+        val entitySets = entitySetService.getEntitySetsOfType(this.et.id)
+                .filter { !it.isLinking && !it.flags.contains(EntitySetFlag.AUDIT) }
+                .toSet()
+        updateEntitySets(enterprise, transporter, entitySets)
+    }
+
     fun updateEntitySet(enterprise: HikariDataSource, transporter: HikariDataSource, es: EntitySet) {
-        if (newMode) {
-            pushColumnsFromEnterpriseStrategy(enterprise, es)
-        } else {
-            pullUpdatedColumnarViewFromTransporter(transporter, es)
+        updateEntitySets(enterprise, transporter, setOf(es))
+    }
+    fun updateEntitySets(enterprise: HikariDataSource, transporter: HikariDataSource, sets: Set<EntitySet>) {
+        if (!checkValid(sets)) {
+            throw IllegalArgumentException("Invalid input sets")
+        }
+        when (mode) {
+            0 -> pullUpdatedColumnarViewFromTransporter(transporter, sets)
+            1 -> pushColumnsFromEnterpriseStrategy(enterprise, sets)
+            2 -> pullBatchFromIdsAndAssemble(transporter, sets)
         }
     }
 
-    fun pushColumnsFromEnterpriseStrategy(hds: HikariDataSource, es: EntitySet) {
-        if (es.isLinking) {
-            // we don't actually want to materialize duplicate data for each linked entity set. we might need to
-            // eventually do other housekeeping
-            return
+    private fun getSourceColumnName(propertyType: PropertyType): String {
+        return PostgresDataTables.getSourceDataColumnName(
+            datatypes[propertyType.datatype].get().first,
+                propertyType.postgresIndexType)
+    }
+
+    private fun checkValid(sets: Set<EntitySet>): Boolean {
+        return sets.all {
+            !it.isLinking && !it.flags.contains(EntitySetFlag.AUDIT)
         }
+    }
+
+    private fun entitySetIds(sets: Set<EntitySet>): Set<UUID> {
+        return sets.associateBy { it.id }.keys
+    }
+
+    private fun partitions(entitySetIds: Set<UUID>): Collection<Int> {
+        return partitionManager.getPartitionsByEntitySetId(entitySetIds).values.flatten().toSet()
+    }
+
+    private inner class SingleColumnQueryHolder(val propertyType: PropertyType) {
+        val srcCol = getSourceColumnName(propertyType)
+        val destCol = quote(propertyType.id.toString())
+        val tempTable = "current_import_batch"
+
+        fun bpUpdate(): String {
+            return "update ${DATA.name} " +
+                    "set ${LAST_PROPAGATE.name} = ${LAST_WRITE.name} " +
+                    "where ${PARTITION.name} = ANY(?) " +
+                    "AND ${ENTITY_SET_ID.name} = ANY(?) " +
+                    "AND ${PROPERTY_TYPE_ID.name} = '${propertyType.id}' " +
+                    "AND ${ORIGIN_ID.name} = '${IdConstants.EMPTY_ORIGIN_ID.id}' " +
+                    "AND ${LAST_PROPAGATE.name} < ${LAST_WRITE.name} " +
+                    "RETURNING ${ENTITY_SET_ID.name}, ${ID.name}, ${VERSION.name}, " +
+                    "case when ${VERSION.name} > 0 then $srcCol else null end as $destCol"
+        }
+
+        fun createTempTable(): String {
+            return "with src as (${bpUpdate()}) select * into temp table $tempTable from src"
+        }
+        fun updateFromTempTable(): String {
+            return updateQuery(tempTable)
+        }
+        fun updateQuery(src: String): String {
+            val pk = listOf(ENTITY_SET_ID, ID).joinToString(", ") { it.name }
+            val cols = "$pk,$destCol"
+            return "INSERT INTO ${table.name} " +
+                    "($cols) " +
+                    "SELECT $cols " +
+                    "FROM $src " +
+                    "ON CONFLICT ($pk) DO UPDATE " +
+                    "SET $destCol = excluded.$destCol"
+        }
+
+        fun oneShot(): String {
+            return "WITH src as (${bpUpdate()}) " + updateQuery("src")
+        }
+
+        fun cleanupQuery(): String {
+            return "DROP TABLE $tempTable"
+        }
+    }
+
+    private fun pullBatchFromIdsAndAssemble(hds: HikariDataSource, sets: Set<EntitySet>) {
+        hds.connection.use { conn ->
+            conn.autoCommit = false
+            var lastSql = ""
+            try {
+                val entitySetIds = entitySetIds(sets)
+                val entitySetArray = PostgresArrays.createUuidArray(conn, entitySetIds)
+                val partitions = PostgresArrays.createIntArray(conn, partitions(entitySetIds))
+                val updates = this.validProperties.values.map { pt ->
+                    val queries = SingleColumnQueryHolder(pt)
+                    if (true) {
+                        lastSql = queries.oneShot()
+                        conn.prepareStatement(queries.oneShot()).use {ps ->
+                            ps.setArray(1, partitions)
+                            ps.setArray(2, entitySetArray)
+                            ps.executeUpdate()
+                        }
+                    } else {
+                        lastSql = queries.createTempTable()
+                        val count1 = conn.prepareStatement(queries.createTempTable()).use { ps ->
+                            ps.setArray(1, partitions)
+                            ps.setArray(2, entitySetArray)
+                            ps.executeUpdate()
+                        }
+                        val count2 = conn.createStatement().use {
+                            lastSql = queries.updateFromTempTable()
+                            val count = it.executeUpdate(queries.updateFromTempTable())
+
+                            lastSql = queries.cleanupQuery()
+                            it.execute(queries.cleanupQuery())
+                            count
+                        }
+                        if (count1 != count2) {
+                            logger.warn("We updated {} rows in data but wrote {} rows to {}", count1, count2, table.name)
+                        }
+                        count2
+                    }
+                }.sum()
+                logger.info("Updated {} properties in entity type {}", updates, et.type)
+                conn.commit()
+            } catch (ex: Exception) {
+                logger.error("Unable to update transporter: SQL: {}", lastSql, ex)
+                conn.rollback()
+                throw ex
+            }
+        }
+    }
+
+    fun pushColumnsFromEnterpriseStrategy(hds: HikariDataSource, sets: Set<EntitySet>) {
+        val entitySetIds = entitySetIds(sets)
         hds.connection.use { conn ->
             conn.autoCommit = false
 
-            val entitySetIds = PostgresArrays.createUuidArray(conn, setOf(es.id))
-            val partitions = PostgresArrays.createIntArray(conn, partitionManager.getEntitySetPartitions(es.id))
+            val entitySetArray = PostgresArrays.createUuidArray(conn, entitySetIds)
+            val partitions = PostgresArrays.createIntArray(conn, partitions(entitySetIds))
             val propertyTypeIds = PostgresArrays.createUuidArray(conn, validProperties.keys)
 
             try {
                 val tempTable = "transporter_batch"
                 val batchQuery = "create temporary table $tempTable on commit drop as " +
-                        " SELECT *" +
-                        " FROM ${DATA.name}" +
-                        " WHERE ${VERSION.name} > 0" +
-                        " AND ${ENTITY_SET_ID.name} = ANY(?)" +
-                        " AND ${PARTITION.name} = ANY(?)" +
-                        " AND ${PROPERTY_TYPE_ID.name} = ANY(?)" +
-                        " AND ${LAST_PROPAGATE.name} < ${DataTables.LAST_WRITE.name} " +
+                        " SELECT * " +
+                        " FROM ${DATA.name} " +
+                        " WHERE ${VERSION.name} > 0 " +
+                        " AND ${ENTITY_SET_ID.name} = ANY(?) " +
+                        " AND ${PARTITION.name} = ANY(?) " +
+                        " AND ${PROPERTY_TYPE_ID.name} = ANY(?) " +
+                        " AND ${LAST_PROPAGATE.name} < ${LAST_WRITE.name} " +
                         " LIMIT $batchSize"
                 val count = conn.prepareStatement(batchQuery).use { st ->
-                    st.setArray(1, entitySetIds)
+                    st.setArray(1, entitySetArray)
                     st.setArray(2, partitions)
                     st.setArray(3, propertyTypeIds)
                     logger.debug(batchQuery)
@@ -156,7 +279,9 @@ class TransporterEntityTypeManager(
                 if (count > 0) {
                     conn.createStatement().use { st ->
                         val ids = "${ENTITY_SET_ID.name}, ${ID.name}"
-                        val newIdCount = st.executeUpdate("with ids as (select distinct $ids from $tempTable) insert into $transporterSchema.${table.name} ($ids) select $ids from ids on conflict do nothing")
+                        val newIdCount = st.executeUpdate("with ids as (select distinct $ids from $tempTable) " +
+                                "insert into $transporterSchema.${table.name} ($ids) " +
+                                "select $ids from ids on conflict do nothing")
                         logger.info("$newIdCount new ids in type ${et.type}")
 
                         val updatedPropCount = validProperties.map { (id, pt) ->
@@ -164,19 +289,19 @@ class TransporterEntityTypeManager(
                             val srcCol = PostgresDataTables.getSourceDataColumnName(type, pt.postgresIndexType)
                             val destCol = quote(id.toString())
 
-                            val updateProperty = "UPDATE $transporterSchema.${table.name} dest" +
-                                    " SET $destCol = $srcCol" +
+                            val updateProperty = "UPDATE $transporterSchema.${table.name} dest " +
+                                    " SET $destCol = $srcCol " +
                                     " FROM $tempTable src " +
-                                    " WHERE src.${ENTITY_SET_ID.name} = dest.${ENTITY_SET_ID.name}" +
-                                    " AND src.${ID.name} = dest.${ID.name}" +
+                                    " WHERE src.${ENTITY_SET_ID.name} = dest.${ENTITY_SET_ID.name} " +
+                                    " AND src.${ID.name} = dest.${ID.name} " +
                                     " AND src.${PROPERTY_TYPE_ID.name} = '$id'"
                             logger.debug(updateProperty)
                             st.executeUpdate(updateProperty)
                         }.sum()
                         logger.info("Updated {} property values", updatedPropCount)
-                        val flushWriteVersion = "UPDATE ${DATA.name} dest" +
-                                " SET ${LAST_PROPAGATE.name} = src.${DataTables.LAST_WRITE.name}" +
-                                " FROM $tempTable src" +
+                        val flushWriteVersion = "UPDATE ${DATA.name} dest " +
+                                " SET ${LAST_PROPAGATE.name} = src.${LAST_WRITE.name} " +
+                                " FROM $tempTable src " +
                                 " WHERE " + arrayOf(PARTITION, ID, PROPERTY_TYPE_ID).joinToString(" AND ") {
                             "dest.${it.name} = src.${it.name}"
                         }
@@ -196,16 +321,15 @@ class TransporterEntityTypeManager(
         }
     }
 
-    fun pullUpdatedColumnarViewFromTransporter(hds: HikariDataSource, es: EntitySet) {
-        if (es.isLinking) {
-            // we don't actually want to materialize duplicate data for each linked entity set. we might need to
-            // eventually do other housekeeping
+    fun pullUpdatedColumnarViewFromTransporter(hds: HikariDataSource, allSets: Set<EntitySet>) {
+        val sets = allSets.filter { !it.isLinking }
+        if (sets.isEmpty()) {
             return
         }
 
-        val queryEntitySets = setOf(es.id)
-        val partitions = partitionManager.getPartitionsByEntitySetId(queryEntitySets).values.flatten().toSet()
-
+        val setNames = sets.joinToString(", ") { es -> es.name }
+        val queryEntitySets = sets.map(EntitySet::getId).toSet()
+        val partitions = partitions(queryEntitySets)
 
         val filterQuery = "select distinct d.${ID.name} " +
                 "from ${DATA.name} d " +
@@ -223,7 +347,7 @@ class TransporterEntityTypeManager(
         }.toList()
 
         if (modifiedEntities.isEmpty()) {
-            logger.info("No modified data for entity set {} of type {}", es.name, et.type)
+            logger.info("No modified data for entity sets {} of type {}", setNames, et.type)
             return
         }
 
@@ -232,7 +356,7 @@ class TransporterEntityTypeManager(
                 validProperties,
                 mapOf(),
                 EnumSet.of(MetadataOption.VERSION),
-                es.isLinking,
+                linking = false,
                 idsPresent = true,
                 partitionsPresent = true,
                 detailed = false
@@ -261,7 +385,7 @@ class TransporterEntityTypeManager(
                     it.setArray(2, PostgresArrays.createUuidArray(conn, modifiedEntities))
                     it.setArray( 3, PostgresArrays.createIntArray(conn, partitions))
                     val count = it.executeUpdate()
-                    logger.info("{} rows updated for entity set {} of type {}", count, es.name, et.type)
+                    logger.info("{} rows updated for entity sets {} of type {}", count, setNames, et.type)
                 }
             }
         } catch (e: SQLException) {

@@ -41,7 +41,7 @@ final class TransporterService(
 
 
     init {
-        dataModelService.entityTypes.map { et -> et.id to TransporterEntityTypeManager(et, dataModelService, partitionManager) }.toMap(entityTypes)
+        dataModelService.entityTypes.map { et -> et.id to TransporterEntityTypeManager(et, dataModelService, partitionManager, entitySetService) }.toMap(entityTypes)
         logger.info("Creating {} entity set tables", entityTypes.size)
         entityTypes.values.forEach {
             it.createTable(transporter, enterprise)
@@ -68,10 +68,16 @@ final class TransporterService(
 
     private fun pollOnce() {
         val start = System.currentTimeMillis()
-        entitySetService.getEntitySets().filterNot { it.flags.contains(EntitySetFlag.AUDIT) }.forEach { es ->
-//        entitySetService.getEntitySet(UUID.fromString("4c38fd26-c616-4f8b-bfb6-b8581859effb"))?.let { es ->
-            entityTypes[es.entityTypeId]?.updateEntitySet(enterprise, transporter, es)
-        }
+        entitySetService
+                .getEntitySets()
+                .filter {
+                    !it.isLinking && !it.flags.contains(EntitySetFlag.AUDIT)
+                }
+                .map { it.entityTypeId }
+                .toSet()
+                .forEach {entityTypeId ->
+                    entityTypes[entityTypeId]?.updateAllEntitysets(enterprise, transporter)
+                }
         val duration = System.currentTimeMillis() - start
         logger.info("Total poll duration time: {} ms", duration)
     }
