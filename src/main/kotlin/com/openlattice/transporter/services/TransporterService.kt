@@ -79,7 +79,7 @@ final class TransporterService(
                 .map { it.entityTypeId }
                 .toSet()
                 .forEach {entityTypeId ->
-                    entityTypes[entityTypeId]?.updateAllEntitysets(enterprise, transporter)
+                    entityTypes[entityTypeId]?.updateAllEntitySets(enterprise, transporter)
                 }
         val duration = System.currentTimeMillis() - start
         logger.info("Total poll duration time: {} ms", duration)
