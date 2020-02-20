@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory
 import java.sql.SQLException
 import java.sql.Statement
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 
 const val batchSize = 64_000
 const val olSchema = "ol"
@@ -84,7 +85,7 @@ class TransporterEntityTypeManager(
                     val (single, _) = it.second.get()
                     table.addColumns(PostgresColumnDefinition(col, single))
                     prop
-                }.associateBy { it.id }.toMutableMap()
+                }.associateBy { it.id }.toMap(ConcurrentHashMap())
 
     private fun executeLog(st: Statement, sql: String): Boolean {
         return try {
@@ -100,7 +101,7 @@ class TransporterEntityTypeManager(
         transporter.connection.use { c ->
             c.autoCommit = false
             c.createStatement().use { st ->
-                executeLog(st, "DROP TABLE ${table.name}")
+//                executeLog(st, "DROP TABLE ${table.name}")
                 executeLog(st, table.createTableQuery())
             }
             c.commit()
@@ -132,7 +133,7 @@ class TransporterEntityTypeManager(
         when (mode) {
             0 -> pullUpdatedColumnarViewFromTransporter(transporter, sets)
             1 -> pushColumnsFromEnterpriseStrategy(enterprise, sets)
-            2 -> pullBatchFromIdsAndAssemble(transporter, sets)
+            2 -> pullBatchFromIdsAndAssemble(enterprise, transporter, sets)
         }
     }
 
@@ -199,12 +200,30 @@ class TransporterEntityTypeManager(
         }
     }
 
-    private fun pullBatchFromIdsAndAssemble(hds: HikariDataSource, sets: Set<EntitySet>) {
-        hds.connection.use { conn ->
+    val checkQuery = "SELECT 1 WHERE EXISTS (select 1 from ${DATA.name} where ${ENTITY_SET_ID.name} = ANY(?) and ${PARTITION.name} = ANY(?) and ${PROPERTY_TYPE_ID.name} = ANY(?) AND ${LAST_WRITE.name} > ${LAST_PROPAGATE.name})"
+
+    private fun pullBatchFromIdsAndAssemble(enterprise: HikariDataSource, transporter: HikariDataSource, sets: Set<EntitySet>) {
+        val entitySetIds = entitySetIds(sets)
+        val modifiedData = enterprise.connection.use {conn->
+            conn.prepareStatement(checkQuery).use { st ->
+                val entitySetArray = PostgresArrays.createUuidArray(conn, entitySetIds)
+                val partitionsArray = PostgresArrays.createIntArray(conn, partitions(entitySetIds))
+                val propsArray = PostgresArrays.createUuidArray(conn, validProperties.keys)
+                st.setArray(1, entitySetArray)
+                st.setArray(2, partitionsArray)
+                st.setArray(3, propsArray)
+                val rs = st.executeQuery()
+                rs.next()
+            }
+        }
+        if (!modifiedData) {
+            logger.info("No modified rows in entity type {}", et.type)
+            return
+        }
+        transporter.connection.use { conn ->
             conn.autoCommit = false
             var lastSql = ""
             try {
-                val entitySetIds = entitySetIds(sets)
                 val entitySetArray = PostgresArrays.createUuidArray(conn, entitySetIds)
                 val partitions = PostgresArrays.createIntArray(conn, partitions(entitySetIds))
                 val updates = this.validProperties.values.map { pt ->

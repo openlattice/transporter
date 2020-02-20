@@ -68,6 +68,9 @@ final class TransporterService(
 
     private fun pollOnce() {
         val start = System.currentTimeMillis()
+        enterprise.connection.use {conn ->
+
+        }
         entitySetService
                 .getEntitySets()
                 .filter {
